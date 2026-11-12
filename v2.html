@@ -1,0 +1,57 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body{font:16px/1.5 -apple-system,sans-serif;margin:0;display:flex;flex-direction:column;height:100dvh}
+  #log{flex:1;overflow:auto;padding:16px;white-space:pre-wrap}
+  #keyrow{display:flex;gap:8px;padding:12px;border-bottom:1px solid #ddd}
+  #keyrow input{flex:1;font:inherit;padding:8px}
+  #note{padding:0 12px 12px;font-size:13px;color:#a00}
+  form{display:flex;gap:8px;padding:12px;border-top:1px solid #ddd}
+  form input{flex:1;font:inherit;padding:8px}
+  button{font:inherit;padding:8px 12px}
+</style>
+
+<div id="keyrow">
+  <input id="k" placeholder="Paste your Venice key" autocomplete="off">
+  <button id="save">Save</button>
+</div>
+<div id="note"></div>
+<div id="log"></div>
+<form><input id="q" placeholder="Ask" autocomplete="off"><button>Send</button></form>
+
+<script type="module">
+  import { send } from "./app.js";
+  const log = document.getElementById("log");
+  const q = document.getElementById("q");
+  const keyrow = document.getElementById("keyrow");
+  const note = document.getElementById("note");
+  const history = [];
+  let key = "";
+
+  document.getElementById("save").onclick = () => {
+    const v = document.getElementById("k").value.trim();
+    if (!v) return;
+    key = v;
+    keyrow.style.display = "none";
+  };
+
+  document.querySelector("form").onsubmit = async e => {
+    e.preventDefault();
+    const text = q.value.trim();
+    if (!text) return;
+    if (!key) { note.textContent = "Paste your key at the top first."; return; }
+    q.value = "";
+    history.push({ role: "user", content: text });
+    log.textContent += "\n\n" + text + "\n\n";
+    let reply = "";
+    const r = await send(key, history, t => {
+      reply += t;
+      log.textContent += t;
+      log.scrollTop = 1e9;
+    });
+    if (r.err === "auth") log.textContent += "\n[key rejected]";
+    else if (r.err === "pay") log.textContent += "\n[out of credit]";
+    else if (r.err) log.textContent += "\n[error " + r.err + "]";
+    else history.push({ role: "assistant", content: reply });
+  };
+</script>
