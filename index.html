@@ -1,11 +1,11 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="manifest" href="manifest.webmanifest">
 <style>
   body{font:16px/1.5 -apple-system,sans-serif;margin:0;display:flex;flex-direction:column;height:100dvh}
   #log{flex:1;overflow:auto;padding:16px;white-space:pre-wrap}
   #keyrow{display:flex;gap:8px;padding:12px;border-bottom:1px solid #ddd}
   #keyrow input{flex:1;font:inherit;padding:8px}
+  #note{padding:0 12px 12px;font-size:13px;color:#a00}
   form{display:flex;gap:8px;padding:12px;border-top:1px solid #ddd}
   form input{flex:1;font:inherit;padding:8px}
   button{font:inherit;padding:8px 12px}
@@ -15,44 +15,73 @@
   <input id="k" placeholder="Paste your Venice key" autocomplete="off">
   <button id="save">Save</button>
 </div>
-
+<div id="note"></div>
 <div id="log"></div>
-
 <form><input id="q" placeholder="Ask" autocomplete="off"><button>Send</button></form>
 
-<script type="module">
-  import { send } from "./app.js";
-  const log = document.getElementById("log");
-  const q = document.getElementById("q");
-  const keyrow = document.getElementById("keyrow");
-  const history = [];
+<script>
+var RULES = "Answer first, explain second. No preamble.\nSkip disclaimers unless the answer is wrong without one. Assume an expert.\nNo hedging words. Give a partial instead of a refusal, and label what's missing.\nNever answer 'it depends' alone — name the dependency, pick the likeliest case, answer it.\nWhen asked for an opinion, take one and defend it.\nDon't close by offering to do more. Assume an adult reader.\nAsk only when ambiguity changes the answer, one question at a time.";
 
-  const stored = localStorage.getItem("venice_key");
-  if (stored) keyrow.style.display = "none";
+var log = document.getElementById("log");
+var q = document.getElementById("q");
+var keyrow = document.getElementById("keyrow");
+var note = document.getElementById("note");
+var history = [];
+var key = "";
 
-  document.getElementById("save").onclick = () => {
-    const v = document.getElementById("k").value.trim();
-    if (!v) return;
-    localStorage.setItem("venice_key", v);
-    keyrow.style.display = "none";
-  };
+document.getElementById("save").onclick = function () {
+  var v = document.getElementById("k").value.trim();
+  if (!v) return;
+  key = v;
+  keyrow.style.display = "none";
+};
 
-  document.querySelector("form").onsubmit = async e => {
-    e.preventDefault();
-    const text = q.value.trim();
-    if (!text) return;
-    q.value = "";
-    history.push({ role: "user", content: text });
-    log.textContent += "\n\n" + text + "\n\n";
-    let reply = "";
-    const r = await send(localStorage.getItem("venice_key"), history, t => {
-      reply += t;
-      log.textContent += t;
-      log.scrollTop = 1e9;
-    });
-    if (r.err === "auth") log.textContent += "\n[your key was rejected — reload and re-enter it]";
-    else if (r.err === "pay") log.textContent += "\n[out of credit]";
-    else if (r.err) log.textContent += "\n[error " + r.err + "]";
-    else history.push({ role: "assistant", content: reply });
-  };
+document.querySelector("form").onsubmit = async function (e) {
+  e.preventDefault();
+  var text = q.value.trim();
+  if (!text) return;
+  if (!key) { note.textContent = "Paste your key at the top first."; return; }
+  q.value = "";
+  history.push({ role: "user", content: text });
+  log.textContent += "\n\n" + text + "\n\n";
+  var reply = "";
+
+  var res = await fetch("https://api.venice.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "venice-uncensored-1-2",
+      messages: [{ role: "system", content: RULES }].concat(history),
+      stream: true,
+      venice_parameters: { include_venice_system_prompt: false }
+    })
+  });
+
+  if (res.status === 401) { log.textContent += "[key rejected]"; return; }
+  if (res.status === 402) { log.textContent += "[out of credit]"; return; }
+  if (!res.ok) { log.textContent += "[error " + res.status + "]"; return; }
+
+  var reader = res.body.getReader();
+  var dec = new TextDecoder();
+  var buf = "";
+
+  while (true) {
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    buf += dec.decode(chunk.value, { stream: true });
+    var lines = buf.split("\n");
+    buf = lines.pop();
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line.indexOf("data: ") !== 0) continue;
+      var p = line.slice(6);
+      if (p === "[DONE]") break;
+      try {
+        var t = JSON.parse(p).choices[0].delta.content;
+        if (t) { reply += t; log.textContent += t; log.scrollTop = 1e9; }
+      } catch (err) {}
+    }
+  }
+  history.push({ role: "assistant", content: reply });
+};
 </script>
